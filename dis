@@ -1,0 +1,74 @@
+#!/bin/bash
+
+# Update package lists
+apt-get update
+
+# Install required packages
+apt-get install -y iptables
+
+# Create the IP blocker script
+cat > /usr/local/bin/ip_blocker.sh <<EOL
+#!/bin/bash
+
+function block_ip() {
+    local ip=\$1
+    iptables -I INPUT -s \$ip -j DROP
+    echo "Blocked IP: \$ip"
+    sleep 300
+    iptables -D INPUT -s \$ip -j DROP
+    echo "Unblocked IP: \$ip"
+}
+
+while true; do
+    data=( \`cat /etc/xray/config.json | grep '#&' | cut -d ' ' -f 2 | sort | uniq\`);
+    for akun in "\${data[@]}"
+    do
+        if [[ -z "\$akun" ]]; then
+            akun="tidakada"
+        fi
+        iplimit=\$(cat /etc/kyt/limit/vless/ip/\${akun})
+        data2=( \`cat /var/log/xray/access.log | tail -n 500 | cut -d " " -f 3 | sed 's/tcp://g' | cut -d ":" -f 1 | sort | uniq\`);
+        declare -A connected_ips
+        for ip in "\${data2[@]}"
+        do
+            if [[ \$(grep -c "\$ip" /var/log/xray/access.log) -gt \$iplimit ]]; then
+                if [[ ! \${connected_ips[\$ip]} ]]; then
+                    connected_ips[\$ip]=1
+                    block_ip \$ip &
+                fi
+            fi
+        done
+    done
+    sleep 10
+done
+EOL
+
+# Make the IP blocker script executable
+chmod +x /usr/local/bin/ip_blocker.sh
+
+# Create the systemd service file
+cat > /etc/systemd/system/ip_blocker.service <<EOL
+[Unit]
+Description=IP Blocker Service
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/ip_blocker.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOL
+
+# Reload the systemd daemon
+systemctl daemon-reload
+
+# Enable the IP blocker service to start on system boot
+systemctl enable ip_blocker
+
+# Start the IP blocker service
+systemctl start ip_blocker
+
+echo "IP Blocker script installation completed."
+echo "The script is now running in the background and will automatically start on system reboot."
